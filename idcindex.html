@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>PotholeWatch — Report. Track. Fix.</title>
+
+  <!-- Leaflet map -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
+
+  <style>
+    /* ── Reset & tokens ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0d0f0e;
+      --surface:  #161918;
+      --card:     #1c1f1e;
+      --border:   #2a2e2c;
+      --accent:   #c8f050;   /* electric lime — civic energy */
+      --accent2:  #ff5c35;   /* danger red for critical potholes */
+      --text:     #e8ebe9;
+      --muted:    #6b7370;
+      --font-h:   'Syne', sans-serif;
+      --font-b:   'DM Sans', sans-serif;
+
+      /* severity palette */
+      --s1: #4caf50;
+      --s2: #8bc34a;
+      --s3: #ffc107;
+      --s4: #ff9800;
+      --s5: #f44336;
+    }
+
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font-b); }
+
+    /* ── Layout ── */
+    .app { display: grid; grid-template-rows: 56px 1fr; height: 100vh; }
+
+    /* ── Topbar ── */
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 24px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      z-index: 1000;
+    }
+    .logo { font-family: var(--font-h); font-weight: 800; font-size: 18px; letter-spacing: -0.5px; }
+    .logo span { color: var(--accent); }
+
+    .stats-row { display: flex; gap: 24px; }
+    .stat { display: flex; flex-direction: column; align-items: center; }
+    .stat-val { font-family: var(--font-h); font-size: 16px; font-weight: 700; color: var(--accent); }
+    .stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+
+    .btn-report {
+      background: var(--accent); color: #0d0f0e;
+      border: none; border-radius: 8px;
+      padding: 8px 18px;
+      font-family: var(--font-h); font-size: 13px; font-weight: 700;
+      cursor: pointer; letter-spacing: 0.02em;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    .btn-report:hover { opacity: 0.88; }
+    .btn-report:active { transform: scale(0.97); }
+
+    /* ── Main content ── */
+    .main { display: grid; grid-template-columns: 380px 1fr; height: 100%; overflow: hidden; }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+
+    .sidebar-header {
+      padding: 20px 24px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .sidebar-title {
+      font-family: var(--font-h); font-size: 13px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .sidebar-count { font-family: var(--font-h); font-size: 28px; font-weight: 800; }
+    .sidebar-count span { color: var(--accent); }
+
+    .reports-list { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+    .reports-list::-webkit-scrollbar { width: 4px; }
+    .reports-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* ── Report card ── */
+    .report-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px;
+      cursor: pointer;
+      transition: border-color 0.15s, transform 0.1s;
+      animation: slideIn 0.25s ease;
+    }
+    @keyframes slideIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    .report-card:hover { border-color: var(--accent); transform: translateX(2px); }
+
+    .card-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    .severity-badge {
+      font-family: var(--font-h); font-size: 11px; font-weight: 700;
+      padding: 3px 10px; border-radius: 999px;
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .status-pill {
+      font-size: 10px; font-weight: 500;
+      padding: 3px 8px; border-radius: 999px;
+      border: 1px solid var(--border); color: var(--muted);
+    }
+    .status-pill.fixed { border-color: #4caf50; color: #4caf50; }
+    .status-pill.in-progress { border-color: #ffc107; color: #ffc107; }
+
+    .card-desc { font-size: 13px; color: var(--text); margin-bottom: 6px; line-height: 1.4; }
+    .card-meta { font-size: 11px; color: var(--muted); }
+
+    /* ── Map ── */
+    #map { width: 100%; height: 100%; }
+
+    /* ── Modal overlay ── */
+    .modal-overlay {
+      display: none;
+      position: fixed; inset: 0; z-index: 2000;
+      background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(4px);
+      align-items: center; justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      width: 440px; max-width: 95vw;
+      padding: 32px;
+      animation: popIn 0.2s ease;
+    }
+    @keyframes popIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: none; } }
+
+    .modal-title {
+      font-family: var(--font-h); font-size: 22px; font-weight: 800;
+      margin-bottom: 6px;
+    }
+    .modal-title span { color: var(--accent); }
+    .modal-sub { font-size: 13px; color: var(--muted); margin-bottom: 24px; }
+
+    /* Form elements */
+    label { display: block; font-size: 12px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+    .form-group { margin-bottom: 18px; }
+
+    input[type="text"], textarea {
+      width: 100%; background: var(--card);
+      border: 1px solid var(--border); border-radius: 10px;
+      color: var(--text); font-family: var(--font-b); font-size: 14px;
+      padding: 12px 14px; outline: none;
+      transition: border-color 0.15s;
+    }
+    input[type="text"]:focus, textarea:focus { border-color: var(--accent); }
+    textarea { resize: none; height: 80px; }
+
+    /* Photo upload */
+    .photo-upload {
+      border: 2px dashed var(--border); border-radius: 12px;
+      padding: 24px; text-align: center; cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+      position: relative;
+    }
+    .photo-upload:hover { border-color: var(--accent); background: rgba(200,240,80,0.03); }
+    .photo-upload input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+    .photo-upload-text { font-size: 13px; color: var(--muted); }
+    .photo-upload-text strong { display: block; font-family: var(--font-h); font-size: 14px; color: var(--text); margin-bottom: 4px; }
+    #photo-preview { max-width: 100%; max-height: 140px; border-radius: 8px; margin-top: 10px; display: none; }
+
+    /* GPS */
+    .gps-row { display: flex; gap: 10px; }
+    .gps-row input { flex: 1; }
+
+    /* Buttons */
+    .modal-actions { display: flex; gap: 10px; margin-top: 24px; }
+    .btn-submit {
+      flex: 1; background: var(--accent); color: #0d0f0e;
+      border: none; border-radius: 10px; padding: 14px;
+      font-family: var(--font-h); font-size: 14px; font-weight: 700;
+      cursor: pointer; transition: opacity 0.15s;
+    }
+    .btn-submit:hover { opacity: 0.88; }
+    .btn-submit:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-cancel {
+      background: transparent; color: var(--muted);
+      border: 1px solid var(--border); border-radius: 10px; padding: 14px 20px;
+      font-family: var(--font-b); font-size: 14px; cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .btn-cancel:hover { border-color: var(--text); color: var(--text); }
+
+    /* Toast */
+    .toast {
+      position: fixed; bottom: 24px; right: 24px; z-index: 9999;
+      background: var(--card); border: 1px solid var(--accent);
+      border-radius: 12px; padding: 14px 20px;
+      font-size: 14px; color: var(--text);
+      display: flex; align-items: center; gap: 10px;
+      animation: toastIn 0.3s ease;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+    @keyframes toastIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+    .toast-icon { font-size: 18px; }
+
+    /* Empty state */
+    .empty-state {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      color: var(--muted); font-size: 13px; text-align: center; padding: 32px;
+    }
+    .empty-state-icon { font-size: 36px; margin-bottom: 12px; opacity: 0.5; }
+
+    /* Leaflet popup custom */
+    .leaflet-popup-content-wrapper {
+      background: var(--card) !important;
+      border: 1px solid var(--border) !important;
+      border-radius: 12px !important;
+      color: var(--text) !important;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5) !important;
+    }
+    .leaflet-popup-tip { background: var(--card) !important; }
+    .popup-title { font-family: var(--font-h); font-weight: 700; font-size: 14px; margin-bottom: 4px; }
+    .popup-meta { font-size: 12px; color: var(--muted); }
+  </style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- Topbar -->
+  <header class="topbar">
+    <div class="logo">Pothole<span>Watch</span></div>
+    <div class="stats-row" id="stats-row">
+      <div class="stat"><span class="stat-val" id="stat-total">0</span><span class="stat-label">Total</span></div>
+      <div class="stat"><span class="stat-val" id="stat-critical" style="color:var(--accent2)">0</span><span class="stat-label">Critical</span></div>
+      <div class="stat"><span class="stat-val" id="stat-fixed" style="color:#4caf50">0</span><span class="stat-label">Fixed</span></div>
+    </div>
+    <button class="btn-report" onclick="openModal()">+ Report Pothole</button>
+  </header>
+
+  <!-- Main -->
+  <div class="main">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-title">Live reports</div>
+        <div class="sidebar-count"><span id="list-count">0</span> potholes found</div>
+      </div>
+      <div class="reports-list" id="reports-list">
+        <div class="empty-state">
+          <div class="empty-state-icon">📍</div>
+          <div>No reports yet.<br/>Be the first to report a pothole.</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Map -->
+    <div id="map"></div>
+  </div>
+</div>
+
+<!-- Report Modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <div class="modal-title">Report a <span>Pothole</span></div>
+    <div class="modal-sub">Help your community — takes 30 seconds</div>
+
+    <div class="form-group">
+      <label>Location (GPS coordinates)</label>
+      <div class="gps-row">
+        <input type="text" id="input-lat" placeholder="Latitude" readonly/>
+        <input type="text" id="input-lng" placeholder="Longitude" readonly/>
+      </div>
+      <div style="margin-top:6px;font-size:11px;color:var(--muted)" id="gps-status">
+        Detecting your location...
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Description</label>
+      <textarea id="input-desc" placeholder="e.g. Large pothole near bus stop, causing accidents..."></textarea>
+    </div>
+
+    <div class="form-group">
+      <label>Photo</label>
+      <div class="photo-upload" id="photo-upload-box">
+        <input type="file" id="photo-input" accept="image/*" onchange="previewPhoto(this)"/>
+        <div class="photo-upload-text">
+          <strong>Tap to upload photo</strong>
+          JPG, PNG — helps the AI score severity
+        </div>
+        <img id="photo-preview" src="" alt="preview"/>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn-submit" id="btn-submit" onclick="submitReport()">Submit Report</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── Config ──────────────────────────────────────────────────────────────────
+  const API = "http://localhost:5000";   // Person 2's backend
+
+  // ── Map setup ───────────────────────────────────────────────────────────────
+  const map = L.map("map", { zoomControl: false }).setView([12.9716, 77.5946], 13);
+
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    attribution: "© OpenStreetMap contributors © CARTO",
+    maxZoom: 19
+  }).addTo(map);
+
+  L.control.zoom({ position: "bottomright" }).addTo(map);
+
+  // Click on map to set location
+  map.on("click", function(e) {
+    document.getElementById("input-lat").value = e.latlng.lat.toFixed(6);
+    document.getElementById("input-lng").value = e.latlng.lng.toFixed(6);
+    document.getElementById("gps-status").textContent = "Location set from map click";
+  });
+
+  // ── Severity helpers ─────────────────────────────────────────────────────────
+  const SEV_LABELS = { 1: "Minor", 2: "Low", 3: "Medium", 4: "High", 5: "Critical" };
+  const SEV_COLORS = {
+    1: "var(--s1)", 2: "var(--s2)", 3: "var(--s3)", 4: "var(--s4)", 5: "var(--s5)"
+  };
+
+  function severityBadge(s) {
+    const color = SEV_COLORS[s] || "var(--muted)";
+    const label = SEV_LABELS[s] || "Unknown";
+    return `<span class="severity-badge" style="background:${color}22;color:${color};border:1px solid ${color}55">${label}</span>`;
+  }
+
+  function markerColor(s) {
+    const colors = { 1: "#4caf50", 2: "#8bc34a", 3: "#ffc107", 4: "#ff9800", 5: "#f44336" };
+    return colors[s] || "#888";
+  }
+
+  function makeIcon(severity) {
+    const color = markerColor(severity);
+    return L.divIcon({
+      className: "",
+      html: `<div style="
+        width:16px;height:16px;
+        background:${color};
+        border:2px solid #fff;
+        border-radius:50%;
+        box-shadow:0 2px 8px rgba(0,0,0,0.5)">
+      </div>`,
+      iconSize: [16, 16],
+      iconAnchor: [8, 8]
+    });
+  }
+
+  // ── Load all reports ─────────────────────────────────────────────────────────
+  let markersMap = {};
+
+  async function loadReports() {
+    try {
+      const res  = await fetch(`${API}/reports`);
+      const data = await res.json();
+      renderReports(data);
+    } catch (e) {
+      console.error("Backend not reachable:", e);
+    }
+    loadStats();
+  }
+
+  function renderReports(reports) {
+    // Clear existing markers
+    Object.values(markersMap).forEach(m => map.removeLayer(m));
+    markersMap = {};
+
+    const list = document.getElementById("reports-list");
+
+    if (!reports || reports.length === 0) {
+      list.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-icon">📍</div>
+          <div>No reports yet.<br/>Be the first to report a pothole.</div>
+        </div>`;
+      document.getElementById("list-count").textContent = "0";
+      return;
+    }
+
+    document.getElementById("list-count").textContent = reports.length;
+    list.innerHTML = "";
+
+    reports.forEach(r => {
+      // Sidebar card
+      const card = document.createElement("div");
+      card.className = "report-card";
+      card.innerHTML = `
+        <div class="card-top">
+          ${severityBadge(r.severity)}
+          <span class="status-pill ${r.status}">${r.status}</span>
+        </div>
+        <div class="card-desc">${r.description || "No description provided"}</div>
+        <div class="card-meta">${r.latitude.toFixed(4)}, ${r.longitude.toFixed(4)} · ${timeAgo(r.created_at)}</div>
+      `;
+      card.onclick = () => {
+        map.setView([r.latitude, r.longitude], 17);
+        markersMap[r.id]?.openPopup();
+      };
+      list.appendChild(card);
+
+      // Map marker
+      const marker = L.marker([r.latitude, r.longitude], { icon: makeIcon(r.severity) })
+        .addTo(map)
+        .bindPopup(`
+          <div class="popup-title">${SEV_LABELS[r.severity] || "Unknown"} Pothole</div>
+          <div class="popup-meta">${r.description || "No description"}</div>
+          <div class="popup-meta" style="margin-top:4px">${timeAgo(r.created_at)} · ${r.status}</div>
+        `);
+      markersMap[r.id] = marker;
+    });
+  }
+
+  async function loadStats() {
+    try {
+      const res  = await fetch(`${API}/stats`);
+      const data = await res.json();
+      document.getElementById("stat-total").textContent    = data.total_reports   || 0;
+      document.getElementById("stat-critical").textContent = data.critical_potholes || 0;
+      document.getElementById("stat-fixed").textContent   = data.fixed            || 0;
+    } catch (e) {}
+  }
+
+  // ── Modal ───────────────────────────────────────────────────────────────────
+  function openModal() {
+    document.getElementById("modal").classList.add("open");
+    getGPS();
+  }
+
+  function closeModal() {
+    document.getElementById("modal").classList.remove("open");
+    document.getElementById("input-desc").value = "";
+    document.getElementById("photo-input").value = "";
+    document.getElementById("photo-preview").style.display = "none";
+    document.getElementById("btn-submit").disabled = false;
+    document.getElementById("btn-submit").textContent = "Submit Report";
+  }
+
+  // ── GPS detection ───────────────────────────────────────────────────────────
+  function getGPS() {
+    const status = document.getElementById("gps-status");
+    if (!navigator.geolocation) {
+      status.textContent = "GPS not supported — click the map to set location";
+      return;
+    }
+    status.textContent = "Detecting your location...";
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        document.getElementById("input-lat").value = pos.coords.latitude.toFixed(6);
+        document.getElementById("input-lng").value = pos.coords.longitude.toFixed(6);
+        status.textContent = "Location detected automatically";
+        map.setView([pos.coords.latitude, pos.coords.longitude], 15);
+      },
+      () => {
+        status.textContent = "Location access denied — click the map to set location";
+      }
+    );
+  }
+
+  // ── Photo preview ───────────────────────────────────────────────────────────
+  function previewPhoto(input) {
+    const preview = document.getElementById("photo-preview");
+    if (input.files && input.files[0]) {
+      const reader = new FileReader();
+      reader.onload = e => {
+        preview.src = e.target.result;
+        preview.style.display = "block";
+      };
+      reader.readAsDataURL(input.files[0]);
+    }
+  }
+
+  // ── Submit report ───────────────────────────────────────────────────────────
+  async function submitReport() {
+    const lat  = document.getElementById("input-lat").value;
+    const lng  = document.getElementById("input-lng").value;
+    const desc = document.getElementById("input-desc").value;
+    const photo = document.getElementById("photo-input").files[0];
+
+    if (!lat || !lng) {
+      showToast("Please set your location first", "⚠️");
+      return;
+    }
+
+    const btn = document.getElementById("btn-submit");
+    btn.disabled = true;
+    btn.textContent = "Submitting...";
+
+    const formData = new FormData();
+    formData.append("latitude",    lat);
+    formData.append("longitude",   lng);
+    formData.append("description", desc);
+    if (photo) formData.append("photo", photo);
+
+    try {
+      const res  = await fetch(`${API}/report`, { method: "POST", body: formData });
+      const data = await res.json();
+
+      if (data.success) {
+        closeModal();
+        showToast(`Report submitted! Severity: ${SEV_LABELS[data.severity] || data.severity}`, "✅");
+        loadReports();   // refresh map + list
+      } else {
+        showToast("Error: " + (data.error || "Unknown error"), "❌");
+        btn.disabled = false;
+        btn.textContent = "Submit Report";
+      }
+    } catch (e) {
+      showToast("Cannot reach backend — is Person 2's server running?", "❌");
+      btn.disabled = false;
+      btn.textContent = "Submit Report";
+    }
+  }
+
+  // ── Toast notification ───────────────────────────────────────────────────────
+  function showToast(msg, icon = "✅") {
+    const t = document.createElement("div");
+    t.className = "toast";
+    t.innerHTML = `<span class="toast-icon">${icon}</span> ${msg}`;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 4000);
+  }
+
+  // ── Time helper ──────────────────────────────────────────────────────────────
+  function timeAgo(iso) {
+    const diff = (Date.now() - new Date(iso + "Z").getTime()) / 1000;
+    if (diff < 60)   return "just now";
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
+  }
+
+  // ── Init ─────────────────────────────────────────────────────────────────────
+  loadReports();
+  setInterval(loadReports, 15000);   // auto-refresh every 15 seconds
+</script>
+</body>
+</html>
